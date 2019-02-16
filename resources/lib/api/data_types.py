@@ -30,17 +30,29 @@ class LoLoMo(object):
         """Pass call on to the backing dict of this LoLoMo."""
         return self.data['lolomos'][self.id].get(key, default)
 
-    def lists_by_context(self, context):
+    def lists_by_context(self, context, break_on_first=False):
         """Return a generator expression that iterates over all video
         lists with the given context.
         Will match any video lists with type contained in context
         if context is a list."""
+        # 'context' may contain a list of multiple contexts or a single
+        # 'context' can be passed as a string, convert to simplify code
+        if not isinstance(context, list):
+            context = [context]
+
         match_context = ((lambda context, contexts: context in contexts)
                          if isinstance(context, list)
                          else (lambda context, target: context == target))
-        return ((list_id, VideoList(self.data, list_id))
-                for list_id, video_list in self.lists.iteritems()
-                if match_context(video_list['context'], context))
+
+        # Keep sort order of context list
+        lists = {}
+        for context_name in context:
+            for list_id, video_list in self.lists.iteritems():
+                if match_context(video_list['context'], context_name):
+                    lists.update({list_id: VideoList(self.data, list_id)})
+                    if break_on_first:
+                        break
+        return iter(lists.iteritems())
 
 
 class VideoList(object):

@@ -14,41 +14,6 @@ import resources.lib.common as common
 from .infolabels import add_info, add_art
 from .context_menu import generate_context_menu_items
 
-VIEW_FOLDER = 'folder'
-VIEW_MOVIE = 'movie'
-VIEW_SHOW = 'show'
-VIEW_SEASON = 'season'
-VIEW_EPISODE = 'episode'
-VIEW_EXPORTED = 'exported'
-
-VIEWTYPES = [VIEW_FOLDER, VIEW_MOVIE, VIEW_SHOW, VIEW_SEASON,
-             VIEW_EPISODE, VIEW_EXPORTED]
-
-CONTENT_FOLDER = 'files'
-CONTENT_MOVIE = 'movies'
-CONTENT_SHOW = 'tvshows'
-CONTENT_SEASON = 'seasons'
-CONTENT_EPISODE = 'episodes'
-
-ADDITIONAL_MAIN_MENU_ITEMS = [
-    {'path': ['genres', '83'],
-     'label': common.get_local_string(30095),
-     'icon': 'DefaultTVShows.png',
-     'description': None},
-    {'path': ['genres', '34399'],
-     'label': common.get_local_string(30096),
-     'icon': 'DefaultMovies.png',
-     'description': None},
-    {'path': ['search'],
-     'label': common.get_local_string(30011),
-     'icon': None,
-     'description': common.get_local_string(30092)},
-    {'path': ['exported'],
-     'label': common.get_local_string(30048),
-     'icon': 'DefaultHardDisk.png',
-     'description': common.get_local_string(30091)},
-]
-
 
 def custom_viewmode(viewtype):
     """Decorator that sets a custom viewmode if currently in
@@ -60,7 +25,7 @@ def custom_viewmode(viewtype):
             # pylint: disable=no-member
             viewtype_override = func(*args, **kwargs)
             view = (viewtype_override
-                    if viewtype_override in VIEWTYPES
+                    if viewtype_override in g.VIEWTYPES
                     else viewtype)
             _activate_view(view)
         return set_custom_viewmode
@@ -87,7 +52,7 @@ def _activate_view(view):
                 'Container.SetViewMode({})'.format(view_id))
 
 
-@custom_viewmode(VIEW_FOLDER)
+@custom_viewmode(g.VIEW_FOLDER)
 @common.time_execution(immediate=False)
 def build_profiles_listing(profiles):
     """Builds the profiles list Kodi screen"""
@@ -123,68 +88,74 @@ def _create_profile_item(profile_guid, profile, html_parser):
     return (url, list_item, True)
 
 
-@custom_viewmode(VIEW_FOLDER)
+@custom_viewmode(g.VIEW_FOLDER)
 @common.time_execution(immediate=False)
 def build_main_menu_listing(lolomo):
     """
     Builds the video lists (my list, continue watching, etc.) Kodi screen
     """
-    directory_items = [_create_videolist_item(list_id, user_list,
-                                              static_lists=True)
-                       for list_id, user_list
-                       in lolomo.lists_by_context(g.KNOWN_LIST_TYPES)]
-    for context_type, data in g.MISC_CONTEXTS.iteritems():
-        directory_items.append(
-            (common.build_url([context_type], mode=g.MODE_DIRECTORY),
-             list_item_skeleton(common.get_local_string(data['label_id']),
-                                icon=data['icon'],
-                                description=common.get_local_string(
-                                    data['description_id'])),
-             True))
-    for menu_item in ADDITIONAL_MAIN_MENU_ITEMS:
-        directory_items.append(
-            (common.build_url(menu_item['path'], mode=g.MODE_DIRECTORY),
-             list_item_skeleton(menu_item['label'],
-                                icon=menu_item['icon'],
-                                description=menu_item['description']),
-             True))
-    finalize_directory(directory_items, CONTENT_FOLDER,
+    directory_items = []
+
+    for menu_id, data in g.MAIN_MENU_ITEMS.iteritems():
+        if data['show_in_menu']:
+            if data['lolomo_known']:
+                for list_id, user_list in lolomo.lists_by_context(data['contexts'], break_on_first=True):
+                    directory_items.append(_create_videolist_item(list_id, user_list, data, static_lists=True))
+            else:
+                menu_title = common.get_local_string(data['label_id']) \
+                    if data['label_id'] is not None else 'Missing menu title'
+                menu_description = common.get_local_string(data['description_id']) \
+                    if data['description_id'] is not None else ''
+                directory_items.append(
+                    (common.build_url(data['path'], mode=g.MODE_DIRECTORY),
+                     list_item_skeleton(menu_title,
+                                        icon=data['icon'],
+                                        description=menu_description),
+                     True))
+
+    finalize_directory(directory_items, g.CONTENT_FOLDER,
                        title=common.get_local_string(30097))
 
 
-@custom_viewmode(VIEW_FOLDER)
+@custom_viewmode(g.VIEW_FOLDER)
 @common.time_execution(immediate=False)
-def build_lolomo_listing(lolomo, contexts=None):
+def build_lolomo_listing(lolomo, menu_data):
     """Build a listing of vieo lists (LoLoMo). Only show those
     lists with a context specified context if contexts is set."""
+    contexts = menu_data['contexts']
+    menu_title = None if menu_data['label_id'] is None else common.get_local_string(menu_data['label_id'])
+
     lists = (lolomo.lists_by_context(contexts)
              if contexts
              else lolomo.lists.iteritems())
-    directory_items = [_create_videolist_item(video_list_id, video_list)
+    directory_items = [_create_videolist_item(video_list_id, video_list, menu_data)
                        for video_list_id, video_list
                        in lists
                        if video_list['context'] != 'billboard']
-    finalize_directory(directory_items, CONTENT_FOLDER,
-                       title=lolomo.get('name'))
+    finalize_directory(directory_items, g.CONTENT_FOLDER,
+                       title=menu_title)
 
 
 @common.time_execution(immediate=False)
-def _create_videolist_item(video_list_id, video_list, static_lists=False):
+def _create_videolist_item(video_list_id, video_list, menu_data, static_lists=False):
     """Create a tuple that can be added to a Kodi directory that represents
     a videolist as listed in a LoLoMo"""
-    if static_lists and video_list['context'] in g.KNOWN_LIST_TYPES:
-        video_list_id = video_list['context']
+    if static_lists and g.is_known_menu_context(video_list['context']):
+        pathitems = menu_data['path']
+        pathitems.append(video_list['context'])
+    else:
+        # Has a dynamic video context
+        pathitems = ['video_list', menu_data['path'][1], video_list_id]
     list_item = list_item_skeleton(video_list['displayName'])
     add_info(video_list.id, list_item, video_list, video_list.data)
     add_art(video_list.id, list_item, video_list.artitem)
-    url = common.build_url(['video_list', video_list_id],
-                           mode=g.MODE_DIRECTORY)
+    url = common.build_url(pathitems, mode=g.MODE_DIRECTORY)
     return (url, list_item, True)
 
 
-@custom_viewmode(VIEW_SHOW)
+@custom_viewmode(g.VIEW_SHOW)
 @common.time_execution(immediate=False)
-def build_video_listing(video_list):
+def build_video_listing(video_list, menu_data):
     """Build a video listing"""
     directory_items = [_create_video_item(videoid_value, video, video_list)
                        for videoid_value, video
@@ -203,8 +174,9 @@ def build_video_listing(video_list):
         #                       mode=g.MODE_DIRECTORY),
         #      list_item_skeleton('Browse subgenres...'),
         #      True))
-    finalize_directory(directory_items, CONTENT_SHOW,
+    finalize_directory(directory_items, menu_data['content_type'],
                        title=video_list.title)
+    return menu_data['view_type']
 
 
 @common.time_execution(immediate=False)
@@ -225,7 +197,7 @@ def _create_video_item(videoid_value, video, video_list):
     return (url, list_item, not is_movie)
 
 
-@custom_viewmode(VIEW_SEASON)
+@custom_viewmode(g.VIEW_SEASON)
 @common.time_execution(immediate=False)
 def build_season_listing(tvshowid, season_list):
     """Build a season listing"""
@@ -233,7 +205,7 @@ def build_season_listing(tvshowid, season_list):
                                            season_list)
                        for seasonid_value, season
                        in season_list.seasons.iteritems()]
-    finalize_directory(directory_items, CONTENT_SEASON,
+    finalize_directory(directory_items, g.CONTENT_SEASON,
                        title=' - '.join((season_list.tvshow['title'],
                                          common.get_local_string(20366)[2:])))
 
@@ -251,7 +223,7 @@ def _create_season_item(tvshowid, seasonid_value, season, season_list):
     return (url, list_item, True)
 
 
-@custom_viewmode(VIEW_EPISODE)
+@custom_viewmode(g.VIEW_EPISODE)
 @common.time_execution(immediate=False)
 def build_episode_listing(seasonid, episode_list):
     """Build a season listing"""
@@ -259,7 +231,7 @@ def build_episode_listing(seasonid, episode_list):
                                             episode_list)
                        for episodeid_value, episode
                        in episode_list.episodes.iteritems()]
-    finalize_directory(directory_items, CONTENT_EPISODE,
+    finalize_directory(directory_items, g.CONTENT_EPISODE,
                        title=' - '.join(
                            (episode_list.tvshow['title'],
                             episode_list.season['summary']['name'])))
@@ -292,11 +264,12 @@ def list_item_skeleton(label, icon=None, fanart=None, description=None):
     return list_item
 
 
-def finalize_directory(items, content_type=CONTENT_FOLDER, refresh=False,
+def finalize_directory(items, content_type=g.CONTENT_FOLDER, refresh=False,
                        title=None):
     """Finalize a directory listing.
     Add items, set available sort methods and content type"""
     if title:
         xbmcplugin.setPluginCategory(g.PLUGIN_HANDLE, title)
-    xbmcplugin.addDirectoryItems(g.PLUGIN_HANDLE, items)
     xbmcplugin.setContent(g.PLUGIN_HANDLE, content_type)
+    xbmcplugin.addDirectoryItems(g.PLUGIN_HANDLE, items)
+    xbmcplugin.endOfDirectory(g.PLUGIN_HANDLE, succeeded=True)
